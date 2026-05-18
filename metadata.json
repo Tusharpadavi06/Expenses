@@ -1,0 +1,6 @@
+{
+  "name": "Professional Expense Claim System",
+  "description": "Full-stack automated expense claim management with Google Sheets integration and email workflows for employees and admins.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
