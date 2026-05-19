@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Send, 
@@ -14,8 +14,15 @@ import {
   ShieldCheck,
   CreditCard,
   Check,
-  MapPin
+  Info,
+  MapPin,
+  LogIn,
+  Plus,
+  SendHorizontal
 } from 'lucide-react';
+import { 
+  auth, googleProvider, signInWithPopup, onAuthStateChanged, User 
+} from './lib/firebase';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -30,8 +37,11 @@ import { Toaster, toast } from 'sonner';
 import { BRANCH_DATA, Branch, Salesperson } from './constants';
 
 // --- Types ---
+const BRANCHES = BRANCH_DATA.map(b => b.name);
+
 interface Claim {
   rowIndex: number;
+  sheetName?: string;
   timestamp: string;
   submissionid: string;
   branchname: string;
@@ -54,15 +64,37 @@ interface Claim {
   paymentrelease: string;
   releasedby: string;
   employeeemail?: string;
+  branchheademail?: string;
 }
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('submit');
-  const [isAdminAuthenticated, setIsAdminAuthenticated] = useState(false);
-  const [pinInput, setPinInput] = useState('');
-  const [showPinDialog, setShowPinDialog] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
   const [claims, setClaims] = useState<Claim[]>([]);
   const [loading, setLoading] = useState(false);
+
+  // Auth Listener
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const handleLogin = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+      toast.success("Logged in successfully!");
+    } catch (err: any) {
+      console.error("Login Error:", err);
+      toast.error("Authentication failed.");
+    }
+  };
+
+  const handleLogout = async () => {
+    await auth.signOut();
+    toast.success("Logged out.");
+  };
   const [filters, setFilters] = useState({
     branch: 'all',
     status: 'all',
@@ -85,6 +117,23 @@ export default function App() {
 
     return matchBranch && matchEmployee && matchStatus && matchMonth && matchYear;
   });
+
+  // Group filtered claims by submission ID for the admin view
+  const filteredGroups = useMemo(() => {
+    const groups: { [key: string]: Claim[] } = {};
+    filteredClaims.forEach(claim => {
+      if (!groups[claim.submissionid]) {
+        groups[claim.submissionid] = [];
+      }
+      groups[claim.submissionid].push(claim);
+    });
+    // Sort by row index descending (latest first)
+    return Object.values(groups).sort((a, b) => {
+      const idxA = a[0].rowIndex;
+      const idxB = b[0].rowIndex;
+      return idxB - idxA;
+    });
+  }, [filteredClaims]);
 
   // Form State
   const [formData, setFormData] = useState({
@@ -164,23 +213,7 @@ export default function App() {
   };
 
   const handleTabChange = (v: string) => {
-    if (v === 'admin' && !isAdminAuthenticated) {
-      setShowPinDialog(true);
-    } else {
-      setActiveTab(v);
-    }
-  };
-
-  const verifyPin = () => {
-    if (pinInput === '1234') {
-      setIsAdminAuthenticated(true);
-      setActiveTab('admin');
-      setShowPinDialog(false);
-      setPinInput('');
-      toast.success('Admin Authenticated');
-    } else {
-      toast.error('Incorrect PIN');
-    }
+    setActiveTab(v);
   };
 
   const fetchClaims = async () => {
@@ -245,16 +278,21 @@ export default function App() {
     }
   };
 
-  const handleAdminAction = async (action: string, rowIndex: number, claim: Claim, extraData?: any) => {
+  const handleAdminAction = async (action: string, claimGroup: Claim[], extraData?: any) => {
     setLoading(true);
     try {
+      // Use the first claim in group for row index reference
+      const claim = claimGroup[0];
       const res = await fetch('/api/admin/action', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           action, 
-          rowIndex, 
+          rowIndex: claim.rowIndex, 
           claimId: claim.submissionid,
+          sheetName: claim.sheetName,
+          adminName: extraData?.adminName,
+          adminEmail: extraData?.adminEmail,
           data: { ...claim, ...extraData } 
         })
       });
@@ -289,30 +327,6 @@ export default function App() {
               <TabsTrigger value="admin" className="text-[10px] md:text-xs uppercase font-black data-[state=active]:bg-[#141414] data-[state=active]:text-white">Admin</TabsTrigger>
             </TabsList>
           </Tabs>
-
-          <Dialog open={showPinDialog} onOpenChange={setShowPinDialog}>
-            <DialogContent className="max-w-xs border-2 border-[#141414] shadow-[8px_8px_0px_rgba(20,20,20,1)]">
-               <div className="space-y-4">
-                  <div className="text-center bg-[#141414] text-white py-2 rounded">
-                    <h3 className="text-[10px] font-black uppercase tracking-widest">Admin Authorization</h3>
-                  </div>
-                  <div className="space-y-2">
-                    <Label className="text-[10px] font-bold uppercase opacity-50">Security PIN</Label>
-                    <Input 
-                      type="password" 
-                      placeholder="****" 
-                      value={pinInput} 
-                      onChange={(e) => setPinInput(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && verifyPin()}
-                      className="text-center font-black tracking-[1em] border-[#141414] focus:ring-0" 
-                    />
-                  </div>
-                  <Button onClick={verifyPin} className="w-full bg-[#141414] hover:bg-[#141414]/90 text-white font-bold h-10 uppercase text-xs">
-                    Unlock Dashboard
-                  </Button>
-               </div>
-            </DialogContent>
-          </Dialog>
 
           <div className="flex items-center gap-2">
             <Badge variant="outline" className="hidden lg:flex border-[#141414] text-[10px] font-bold">V1.28.0</Badge>
@@ -503,12 +517,37 @@ export default function App() {
                     <h2 className="text-4xl font-black uppercase italic">Claims Dashboard</h2>
                     <p className="text-[#141414]/60 font-serif italic">Review and process employee claims securely.</p>
                   </div>
-                  <Button onClick={fetchClaims} loading={loading} variant="outline" className="border-[#141414] border-2 shadow-[4px_4px_0px_0px_rgba(20,20,20,1)] bg-white">
-                    Refresh Data
-                  </Button>
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    {user ? (
+                      <div className="flex items-center gap-3 bg-white border-2 border-blue-600 p-1.5 pr-4 rounded-xl shadow-[4px_4px_0px_0px_rgba(37,99,235,1)]">
+                        <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white font-black text-sm">
+                          {user.displayName?.charAt(0)}
+                        </div>
+                        <div className="text-left">
+                          <p className="text-[10px] font-black uppercase leading-none">{user.displayName}</p>
+                          <p className="text-[8px] opacity-40 font-mono">{user.email}</p>
+                        </div>
+                        <Button 
+                          variant="ghost" 
+                          size="icon" 
+                          className="h-6 w-6 ml-2 text-slate-400 hover:text-red-500"
+                          onClick={handleLogout}
+                        >
+                          <LogOut className="w-3 h-3" />
+                        </Button>
+                      </div>
+                    ) : (
+                      <Button onClick={handleLogin} className="bg-blue-600 border-2 border-[#141414] shadow-[4px_4px_0px_0px_rgba(20,20,20,1)] hover:bg-blue-700 h-10 px-4 font-black uppercase text-xs italic">
+                        <LogIn className="w-4 h-4 mr-2" /> Admin Sign In
+                      </Button>
+                    )}
+                    <Button onClick={fetchClaims} loading={loading} variant="outline" className="border-[#141414] border-2 shadow-[4px_4px_0px_0px_rgba(20,20,20,1)] bg-white h-10 font-black uppercase text-xs italic">
+                      Refresh Data
+                    </Button>
+                  </div>
                 </div>
 
-                <div className="grid grid-cols-2 md:grid-cols-5 gap-4 p-4 bg-white border-2 border-[#141414] rounded-xl shadow-[4px_4px_0px_0px_rgba(20,20,20,1)]">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-4 bg-white border-2 border-[#141414] rounded-xl shadow-[4px_4px_0px_0px_rgba(20,20,20,1)]">
                   <div className="space-y-1">
                     <Label className="text-[10px] font-black uppercase opacity-60">Employee</Label>
                     <Input 
@@ -560,25 +599,16 @@ export default function App() {
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="space-y-1">
-                    <Label className="text-[10px] font-black uppercase opacity-60">Year</Label>
-                    <Input 
-                      placeholder="2026" 
-                      value={filters.year}
-                      onChange={e => setFilters(prev => ({ ...prev, year: e.target.value }))}
-                      className="h-8 text-xs border-[#141414]/20" 
-                    />
-                  </div>
                 </div>
 
                 <div className="flex gap-2 p-2 bg-[#141414] text-white rounded text-[8px] font-mono uppercase">
                   <div className="flex items-center gap-1 border-r border-white/20 pr-2">
                     <ShieldCheck className="w-2.5 h-2.5 text-green-400" />
-                    <span>Configured Admin: {/* process.env isn't available here, but let's just make it look good */} System Active</span>
+                    <span>Cloud Database: Connected</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <CreditCard className="w-2.5 h-2.5 text-blue-400" />
-                    <span>Accounts Routing: Active</span>
+                    <span>Spreadsheet Sync: Active</span>
                   </div>
                 </div>
               </div>
@@ -595,65 +625,86 @@ export default function App() {
                       <TableHead className="text-white font-black uppercase text-[7px] h-8 text-right">Amount</TableHead>
                       <TableHead className="text-white font-black uppercase text-[7px] h-8 max-w-[150px]">Admin Remark</TableHead>
                       <TableHead className="text-white font-black uppercase text-[7px] h-8 text-center">Status</TableHead>
-                      <TableHead className="text-white font-black uppercase text-[7px] h-8 text-right pr-4">Actions</TableHead>
+                      <TableHead className="text-white font-black uppercase text-[7px] h-8 text-right pr-6 min-w-[100px]">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredClaims.map((claim) => (
-                      <TableRow key={claim.rowIndex} className="hover:bg-[#F5F5F0]/50 border-b border-[#141414]/10">
-                        <TableCell className="py-2">
-                          <div className="font-bold text-[9px]">{claim.submissionid}</div>
-                          <div className="text-[7px] text-muted-foreground uppercase">{claim.timestamp}</div>
-                        </TableCell>
-                        <TableCell className="py-2">
-                          <div className="font-bold uppercase text-[8px]">{claim.branchname}</div>
-                        </TableCell>
-                        <TableCell className="py-2">
-                          <div className="font-bold uppercase text-[8px]">{claim.salespersonname}</div>
-                          <div className="text-[7px] opacity-40 truncate">{claim.employeeemail}</div>
-                        </TableCell>
-                        <TableCell className="py-2">
-                          <div className="font-bold uppercase text-[8px]">{claim.expensecategory}</div>
-                          <div className="text-[7px] opacity-40 uppercase">{claim.itemdate}</div>
-                        </TableCell>
-                        <TableCell className="py-2">
-                          <div className="text-[8px] font-medium">
-                            {claim.fromlocation} {claim.tolocation ? `→ ${claim.tolocation}` : ''}
-                          </div>
-                          {claim.attachmentlink && claim.attachmentlink !== "Upload Failed" ? (
-                            <Badge variant="outline" className="text-[6px] h-2.5 px-1 mt-0.5 border-blue-200 text-blue-600 bg-blue-50">FILE</Badge>
-                          ) : null}
-                        </TableCell>
-                        <TableCell className="font-mono font-bold text-[10px] text-right py-2">
-                          ₹{claim.grandtotal}
-                        </TableCell>
-                        <TableCell className="py-2">
-                          <div className="text-[8px] text-muted-foreground italic truncate max-w-[150px]">
-                            {claim.adminremark || '---'}
-                          </div>
-                          {claim.mailsent === 'Yes' && <Badge variant="outline" className="text-[6px] h-2.5 px-1 border-green-200 text-green-600 bg-green-50 mt-0.5">MAIL</Badge>}
-                        </TableCell>
-                        <TableCell className="py-2">
-                          <div className="flex flex-col items-center gap-0.5">
-                            <div className="flex gap-0.5">
-                              {claim.approved === 'Yes' ? (
-                                <Badge className="bg-green-100 text-green-700 border-green-200 text-[6px] h-3 px-1">APPV</Badge>
-                              ) : (
-                                <Badge variant="outline" className="text-[6px] h-3 px-1">PEND</Badge>
-                              )}
-                              {claim.paymentprocess === 'Yes' && <Badge className="bg-blue-100 text-blue-700 text-[6px] h-3 px-1">PROC</Badge>}
+                    {filteredGroups.map((group) => {
+                      const mainClaim = group[0];
+                      return (
+                        <TableRow key={mainClaim.submissionid} className="hover:bg-[#F5F5F0]/50 border-b border-[#141414]/10">
+                          <TableCell className="py-2">
+                            <div className="font-bold text-[9px]">{mainClaim.submissionid}</div>
+                            <div className="text-[7px] text-muted-foreground uppercase">{mainClaim.timestamp}</div>
+                            <Badge variant="outline" className="text-[6px] h-3 px-1 mt-1 opacity-60 bg-white">
+                              {group.length} ITEM(S)
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="py-2">
+                            <div className="font-bold uppercase text-[8px]">{mainClaim.branchname}</div>
+                          </TableCell>
+                          <TableCell className="py-2">
+                            <div className="font-bold uppercase text-[8px]">{mainClaim.salespersonname}</div>
+                            <div className="text-[7px] opacity-40 truncate max-w-[120px]">{mainClaim.employeeemail}</div>
+                          </TableCell>
+                          <TableCell className="py-2">
+                            <div className="space-y-1">
+                              {group.map((item, idx) => (
+                                <div key={idx} className="flex items-center gap-1">
+                                  <Badge variant="secondary" className="text-[6px] h-3 px-1 bg-slate-100/50">
+                                    {item.expensecategory}
+                                  </Badge>
+                                  <span className="text-[7px] font-mono">₹{item.amount}</span>
+                                </div>
+                              ))}
                             </div>
-                            {claim.paymentrelease === 'Yes' && <Badge className="bg-purple-100 text-purple-700 text-[6px] h-3 px-1">RELS</Badge>}
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-right py-2">
-                          <AdminActionDialog claim={claim} onAction={(action, d) => handleAdminAction(action, claim.rowIndex, claim, d)} />
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                    {filteredClaims.length === 0 && (
+                          </TableCell>
+                          <TableCell className="py-2">
+                            <div className="text-[8px] font-medium max-w-[150px] truncate">
+                              {group.map(item => item.fromlocation).filter(Boolean).join(', ')}
+                            </div>
+                            <div className="flex gap-1 mt-0.5">
+                              {group.some(i => i.attachmentlink && i.attachmentlink !== "Upload Failed") && (
+                                <Badge variant="outline" className="text-[6px] h-3 px-1 border-blue-200 text-blue-600 bg-blue-50">FILES</Badge>
+                              )}
+                            </div>
+                          </TableCell>
+                          <TableCell className="font-mono font-bold text-[10px] text-right py-2">
+                            ₹{mainClaim.grandtotal}
+                          </TableCell>
+                          <TableCell className="py-2">
+                            <div className="text-[8px] text-muted-foreground italic truncate max-w-[150px]">
+                              {mainClaim.adminremark || '---'}
+                            </div>
+                            {mainClaim.mailsent === 'Yes' && <Badge variant="outline" className="text-[6px] h-3 px-1 border-green-200 text-green-600 bg-green-50 mt-0.5">MAIL</Badge>}
+                          </TableCell>
+                          <TableCell className="py-2">
+                            <div className="flex flex-col items-center gap-0.5">
+                              <div className="flex gap-0.5">
+                                {mainClaim.approved === 'Yes' ? (
+                                  <Badge className="bg-green-100 text-green-700 border-green-200 text-[6px] h-3 px-1 font-bold">APPV</Badge>
+                                ) : (
+                                  <Badge variant="outline" className="text-[6px] h-3 px-1 font-bold opacity-40">PEND</Badge>
+                                )}
+                                {mainClaim.paymentprocess === 'Yes' && <Badge className="bg-blue-100 text-blue-700 border-blue-200 text-[6px] h-3 px-1 font-bold">PROC</Badge>}
+                              </div>
+                              {mainClaim.paymentrelease === 'Yes' && <Badge className="bg-purple-100 text-purple-700 border-purple-200 text-[6px] h-3 px-1 font-bold">RELS</Badge>}
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-right py-2">
+                            <AdminActionDialog 
+                              claim={mainClaim} 
+                              group={group} 
+                              onAction={(action, d) => handleAdminAction(action, group, d)} 
+                              predefinedAdmin={user ? { name: user.displayName || 'Admin', email: user.email || '' } : undefined}
+                            />
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                    {filteredGroups.length === 0 && (
                       <TableRow>
-                        <TableCell colSpan={5} className="text-center py-12 text-muted-foreground">
+                        <TableCell colSpan={9} className="text-center py-12 text-muted-foreground">
                           No claims found.
                         </TableCell>
                       </TableRow>
@@ -683,114 +734,263 @@ export default function App() {
   );
 }
 
-function AdminActionDialog({ claim, onAction }: { claim: Claim, onAction: (a: string, d?: any) => void }) {
+function AdminActionDialog({ claim, onAction, group, predefinedAdmin }: { claim: Claim, onAction: (a: string, d?: any) => void, group: Claim[], predefinedAdmin?: { name: string; email: string } }) {
   const [remark, setRemark] = useState(claim.adminremark || '');
   const [email, setEmail] = useState(claim.employeeemail || '');
+  const [adminName, setAdminName] = useState(predefinedAdmin?.name || 'Expense Admin');
+  const [adminEmail, setAdminEmail] = useState(predefinedAdmin?.email || '');
+
+  // Update when predefined admin changes
+  useEffect(() => {
+    if (predefinedAdmin?.name) setAdminName(predefinedAdmin.name);
+    if (predefinedAdmin?.email) setAdminEmail(predefinedAdmin.email);
+  }, [predefinedAdmin]);
+
+  // Update email if claim changes
+  useEffect(() => {
+    setEmail(claim.employeeemail || '');
+  }, [claim.employeeemail]);
 
   // Look up branch head email from constants
   const branchInfo = BRANCH_DATA.find(b => b.name === claim.branchname);
   const branchHeadEmail = branchInfo?.headEmail || '';
 
+  const getActionData = (extra?: any) => ({
+    remark,
+    employeeemail: email,
+    branchheademail: branchHeadEmail,
+    adminName,
+    adminEmail,
+    ...extra
+  });
+
   return (
     <Dialog>
-      <DialogTrigger asChild>
-        <Button size="sm" variant="outline" className="border-[#141414] hover:bg-[#141414] hover:text-white transition-colors">
-          Manage <ChevronRight className="w-4 h-4 ml-1" />
-        </Button>
-      </DialogTrigger>
-      <DialogContent className="max-w-2xl border-2 border-[#141414] shadow-[8px_8px_0px_rgba(20,20,20,1)]">
-        <div className="space-y-6">
-          <div>
-            <h2 className="text-2xl font-black uppercase tracking-tight">Claim Review</h2>
-            <p className="text-sm opacity-60 italic font-serif">{claim.submissionid} | {claim.salespersonname}</p>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4 bg-[#F5F5F0] p-4 rounded border border-[#141414]/10 font-mono text-xs">
-            <div><span className="opacity-50 uppercase">Category:</span> {claim.expensecategory}</div>
-            <div><span className="opacity-50 uppercase">Date:</span> {claim.itemdate}</div>
-            <div><span className="opacity-50 uppercase">Location:</span> {claim.fromlocation} - {claim.tolocation}</div>
-            <div><span className="opacity-50 uppercase">Remark:</span> {claim.itemremark}</div>
-            <div className="col-span-2 pt-2 border-t border-[#141414]/5 flex items-center justify-between">
-              <span className="opacity-50 uppercase">Attachment:</span>
-              {claim.attachmentlink && claim.attachmentlink !== "Upload Failed" ? (
-                <a 
-                  href={claim.attachmentlink} 
-                  target="_blank" 
-                  rel="noopener noreferrer" 
-                  className="text-blue-600 font-bold hover:underline flex items-center gap-1"
-                >
-                  View Bill <ChevronRight className="w-3 h-3" />
-                </a>
-              ) : (
-                <span className="text-red-400 italic">No File</span>
-              )}
+      <DialogTrigger
+        render={
+          <button className="inline-flex items-center justify-center rounded-md text-[10px] font-black uppercase border-2 border-[#141414] bg-white hover:bg-[#141414] hover:text-white h-8 px-4 transition-all shadow-[2px_2px_0px_0px_rgba(20,20,20,1)] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none">
+            Manage <ChevronRight className="w-3 h-3 ml-1" />
+          </button>
+        }
+      />
+      <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col border-2 border-[#141414] shadow-[12px_12px_0px_rgba(20,20,20,1)] p-0 bg-white overflow-hidden">
+        <div className="p-6 overflow-y-auto space-y-6">
+          <div className="flex justify-between items-start">
+            <div className="space-y-1">
+              <Badge className="bg-[#141414] text-white text-[8px] px-2 py-0 font-bold uppercase tracking-widest">Review Portal</Badge>
+              <h2 className="text-2xl font-black uppercase tracking-tight leading-none pt-1">{claim.salespersonname}</h2>
+              <div className="flex items-center gap-2">
+                <Mail className="w-3 h-3 text-blue-600" />
+                <span className="text-[11px] font-bold text-blue-600 underline">{claim.employeeemail || 'No Email Found'}</span>
+              </div>
+              <p className="text-[10px] opacity-40 uppercase font-mono">{claim.submissionid} | {claim.branchname}</p>
+            </div>
+            <div className="text-right space-y-2">
+              <div className="bg-yellow-50 border-2 border-yellow-400 p-2 rounded shadow-[4px_4px_0px_rgba(161,98,7,0.2)]">
+                <Label className="text-[8px] font-black uppercase opacity-60 block text-right tracking-widest">Active Administrator</Label>
+                <div className="text-[11px] font-black text-[#141414] uppercase">{adminName}</div>
+                <div className="text-[9px] opacity-70 font-mono">{adminEmail}</div>
+                <p className="text-[7px] mt-1 text-yellow-700 italic font-bold leading-none">* Mails will be sent as {adminName}</p>
+              </div>
             </div>
           </div>
 
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label className="text-xs font-bold uppercase">Admin Remark (To be emailed to employee)</Label>
-              <Textarea 
-                placeholder="Write your feedback..." 
-                value={remark} 
-                onChange={e => setRemark(e.target.value)}
-                className="border-[#141414]"
-              />
-              <div className="grid grid-cols-2 gap-4">
-                 <div className="space-y-2">
-                    <Label className="text-[10px] opacity-60 uppercase font-black">Employee Email</Label>
-                    <Input placeholder="employee@company.com" value={email} onChange={e => setEmail(e.target.value)} className="text-xs h-8 border-[#141414]" />
-                 </div>
-                 <div className="flex items-end">
-                    <Button 
-                      className="w-full bg-[#141414] text-xs h-8"
-                      disabled={!remark || !email}
-                      onClick={() => onAction('REMARK', { remark, employeeemail: email, branchheademail: branchHeadEmail })}
-                    >
-                      <Mail className="w-3 h-3 mr-2" /> Send Remark Email
-                    </Button>
-                 </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between border-b-2 border-[#141414] pb-1">
+                <p className="text-[10px] font-black uppercase tracking-tight">Summary by Category</p>
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-[10px] bg-slate-50 p-2 rounded border border-[#141414]/5">
+                {Object.entries(group.reduce((acc: any, item) => {
+                  acc[item.expensecategory] = (acc[item.expensecategory] || 0) + Number(item.amount);
+                  return acc;
+                }, {})).map(([cat, amt]: any) => (
+                  <div key={cat} className="flex justify-between border-b border-dashed border-[#141414]/10 pb-1">
+                    <span className="font-bold opacity-60 uppercase">{cat}:</span>
+                    <span className="font-black text-blue-900">₹{amt}</span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex items-center justify-between border-b-2 border-[#141414] pb-1 pt-2">
+                <p className="text-[10px] font-black uppercase tracking-tight">Itemized Breakdown ({group.length})</p>
+                <div className="bg-[#141414] text-white text-[10px] px-2 py-0.5 rounded font-black">
+                  ₹{claim.grandtotal}
+                </div>
+              </div>
+              
+              <div className="max-h-[380px] overflow-y-auto pr-2 space-y-2 custom-scrollbar">
+                {group.map((item, idx) => (
+                  <div key={idx} className="bg-slate-50 border border-[#141414]/10 rounded-md p-3 hover:bg-white hover:border-[#141414]/30 transition-all border-l-4 border-l-blue-500 shadow-sm">
+                    <div className="flex justify-between items-start">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-1">
+                          <Badge variant="outline" className="text-[9px] font-black uppercase border-blue-200 bg-blue-50 text-blue-700 h-4 px-1.5 rounded-sm">
+                            {item.expensecategory}
+                          </Badge>
+                          <span className="text-[9px] opacity-40 font-mono">{item.itemdate}</span>
+                        </div>
+                        <p className="text-[11px] font-bold leading-tight">
+                          {item.fromlocation} {item.tolocation ? `→ ${item.tolocation}` : ''}
+                        </p>
+                        {item.itemremark && (
+                          <div className="text-[9px] mt-2 p-1.5 bg-white/60 border border-dashed border-[#141414]/10 rounded font-serif italic text-slate-600">
+                             {item.itemremark}
+                          </div>
+                        )}
+                      </div>
+                      <div className="text-right ml-4">
+                        <div className="text-sm font-black text-blue-900 leading-none">₹{item.amount}</div>
+                        {item.attachmentlink && item.attachmentlink !== "Upload Failed" && (
+                          <a 
+                            href={item.attachmentlink} 
+                            target="_blank" 
+                            rel="noopener noreferrer" 
+                            className="inline-flex items-center gap-1 text-[8px] font-black text-blue-600 hover:bg-blue-50 px-2 py-1 rounded border border-blue-200 mt-2 transition-colors uppercase"
+                          >
+                            <FileText className="w-2.5 h-2.5" /> View Bill
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
 
-            <div className="grid grid-cols-4 gap-4 border-t border-[#141414]/10 pt-6">
-              <Button 
-                variant="outline" 
-                className="flex-col h-auto py-4 border-2 border-[#141414] hover:bg-green-50 shadow-[4px_4px_0px_0px_rgba(22,163,74,0.1)]"
-                onClick={() => onAction('APPROVE', { employeeemail: email, branchheademail: branchHeadEmail })}
-                disabled={claim.approved === 'Yes'}
-              >
-                <ShieldCheck className="w-6 h-6 mb-2 text-green-600" />
-                <span className="text-[9px] font-black uppercase text-center">Admin<br/>Approve</span>
-              </Button>
+            <div className="space-y-4">
+              {/* SENDER PROFILE BOX */}
+              <div className="bg-blue-50 border-2 border-blue-200 p-4 rounded-xl space-y-4 shadow-sm relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-24 h-24 bg-blue-100/30 rounded-full -mr-12 -mt-12 blur-2xl" />
+                <div className="flex items-center justify-between border-b border-blue-100 pb-3 relative z-10">
+                   <div className="flex items-center gap-2">
+                     <div className="bg-blue-600 p-2 rounded-lg shadow-[2px_2px_0px_rgba(20,20,20,0.2)]">
+                       <ShieldCheck className="w-5 h-5 text-white" />
+                     </div>
+                     <div>
+                       <p className="text-[10px] font-black uppercase text-blue-900 leading-none tracking-tight">Active Identity</p>
+                       <p className="text-[8px] text-blue-600 font-bold uppercase tracking-widest mt-0.5">Admin Session</p>
+                     </div>
+                   </div>
+                   <div className="text-right">
+                     <p className="text-[12px] font-black text-blue-900 uppercase tracking-tight">{adminName}</p>
+                     <p className="text-[9px] text-blue-700 font-mono italic opacity-70">{adminEmail}</p>
+                   </div>
+                </div>
+                
+                <div className="space-y-3 relative z-10">
+                   <div className="flex items-center justify-between">
+                     <Label className="text-[10px] font-black uppercase text-blue-800/60">Target Recipient</Label>
+                     <span className="bg-blue-600 text-white text-[7px] px-1.5 py-0.5 rounded font-black italic">AUTO-SYNCED</span>
+                   </div>
+                   <div className="relative group">
+                     <Mail className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-blue-400 group-focus-within:text-blue-600 transition-colors" />
+                     <Input 
+                       value={email} 
+                       onChange={e => setEmail(e.target.value)} 
+                       className="h-10 text-xs pl-8 border-blue-100 bg-white font-bold text-blue-900 focus:ring-4 focus:ring-blue-100 transition-all border-2" 
+                     />
+                   </div>
+                   <div className="bg-white/60 p-3 rounded-lg border-2 border-dashed border-blue-200 text-[9px] text-blue-700 leading-relaxed">
+                     <div className="flex items-start gap-2">
+                       <Info className="w-3 h-3 mt-0.5 shrink-0" />
+                       <p>Mails deploy via SMTP protocol. Visual header will display <b>"{adminName}"</b>. Reply-to routing points to <b>{adminEmail}</b>.</p>
+                     </div>
+                   </div>
+                </div>
+              </div>
 
-              <Button 
-                variant="outline" 
-                className="flex-col h-auto py-4 border-2 border-[#141414] hover:bg-blue-50 shadow-[4px_4px_0px_0px_rgba(37,99,235,0.1)]"
-                onClick={() => onAction('PROCESS', { employeeemail: email, branchheademail: branchHeadEmail })}
-                disabled={claim.approved !== 'Yes' || claim.paymentprocess === 'Yes'}
-              >
-                <CreditCard className="w-6 h-6 mb-2 text-blue-600" />
-                <span className="text-[9px] font-black uppercase text-center">Process<br/>Payment</span>
-              </Button>
+              {/* REMARK BOX */}
+              <div className="bg-slate-50 border-2 border-[#141414] p-4 rounded-xl space-y-3 shadow-[4px_4px_0px_rgba(20,20,20,0.05)]">
+                <div className="flex items-center gap-2 border-b border-[#141414]/10 pb-2">
+                  <div className="bg-[#141414] p-1.5 rounded text-white italic font-serif text-[10px] lowercase">"txt"</div>
+                  <Label className="text-[10px] font-black uppercase text-[#141414]">Administrative Communication</Label>
+                </div>
+                <Textarea 
+                  placeholder="Enter official remark or feedback for the claimant..." 
+                  value={remark} 
+                  onChange={e => setRemark(e.target.value)}
+                  className="border-slate-200 min-h-[90px] text-xs resize-none bg-white focus:border-[#141414] transition-all"
+                />
+                <Button 
+                  className="w-full bg-[#141414] hover:bg-blue-600 text-white text-[10px] h-9 font-black uppercase tracking-widest shadow-[4px_4px_0px_0px_rgba(20,20,20,0.1)] active:shadow-none active:translate-x-[1px] active:translate-y-[1px] transition-all"
+                  disabled={!remark || !email}
+                  onClick={() => onAction('REMARK', getActionData())}
+                >
+                  <Send className="w-3 h-3 mr-2" /> Dispatch Remark
+                </Button>
+              </div>
+            </div>
 
-              <Button 
-                variant="outline" 
-                className="flex-col h-auto py-4 border-2 border-[#141414] hover:bg-purple-50 shadow-[4px_4px_0px_0px_rgba(147,51,234,0.1)]"
-                onClick={() => onAction('RELEASE', { employeeemail: email, branchheademail: branchHeadEmail })}
-                disabled={claim.paymentprocess !== 'Yes' || claim.paymentrelease === 'Yes'}
-              >
-                <CheckCircle2 className="w-6 h-6 mb-2 text-purple-600" />
-                <span className="text-[9px] font-black uppercase text-center">Final<br/>Release</span>
-              </Button>
-              
-              <div className="flex flex-col justify-center px-2 bg-slate-50 border border-slate-200 rounded">
-                <span className="text-[8px] font-bold opacity-40 uppercase">Status</span>
-                <span className="text-[10px] font-black uppercase tracking-tighter truncate">
-                  {claim.paymentrelease === 'Yes' ? 'Settled' : 
-                   claim.paymentprocess === 'Yes' ? 'Processed' :
-                   claim.approved === 'Yes' ? 'Approved' : 'Pending'}
-                </span>
+            {/* ACTION SECTION IN A PROPER BOX */}
+            <div className="col-span-full mt-2">
+              <div className="bg-white border-4 border-[#141414] rounded-2xl p-5 shadow-[8px_8px_0px_0px_rgba(20,20,20,1)] relative overflow-hidden">
+                <div className="absolute top-0 right-0 p-3">
+                  <Badge className="bg-slate-100 text-slate-400 font-mono text-[7px] border-none shadow-none uppercase">Sequence Controls</Badge>
+                </div>
+                <h3 className="text-[12px] font-black uppercase tracking-tighter mb-4 flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-blue-600 animate-pulse" />
+                  Administrator Control Center
+                </h3>
+
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+                  <Button 
+                    variant="outline" 
+                    className={`flex-col h-auto py-5 border-2 border-[#141414] transition-all group ${
+                      claim.approved === 'Yes' 
+                        ? 'bg-slate-100 opacity-50 grayscale cursor-not-allowed' 
+                        : 'bg-green-50 hover:bg-green-100 shadow-[4px_4px_0px_0px_rgba(22,163,74,1)] active:shadow-none hover:-translate-y-1'
+                    }`}
+                    onClick={() => onAction('APPROVE', getActionData())}
+                    disabled={claim.approved === 'Yes'}
+                  >
+                    <ShieldCheck className={`w-8 h-8 mb-2 ${claim.approved === 'Yes' ? 'text-slate-400' : 'text-green-600 group-hover:scale-110 transition-transform'}`} />
+                    <span className="text-[10px] font-black uppercase text-center leading-tight">01. Admin<br/>Approve</span>
+                  </Button>
+
+                  <Button 
+                    variant="outline" 
+                    className={`flex-col h-auto py-5 border-2 border-[#141414] transition-all group ${
+                      claim.approved !== 'Yes' || claim.paymentprocess === 'Yes'
+                        ? 'bg-slate-100 opacity-50 grayscale cursor-not-allowed' 
+                        : 'bg-blue-50 hover:bg-blue-100 shadow-[4px_4px_0px_0px_rgba(37,99,235,1)] active:shadow-none hover:-translate-y-1'
+                    }`}
+                    onClick={() => onAction('PROCESS', getActionData())}
+                    disabled={claim.approved !== 'Yes' || claim.paymentprocess === 'Yes'}
+                  >
+                    <CreditCard className={`w-8 h-8 mb-2 ${claim.approved !== 'Yes' || claim.paymentprocess === 'Yes' ? 'text-slate-400' : 'text-blue-600 group-hover:scale-110 transition-transform'}`} />
+                    <span className="text-[10px] font-black uppercase text-center leading-tight">02. Process<br/>Payment</span>
+                  </Button>
+
+                  <Button 
+                    variant="outline" 
+                    className={`flex-col h-auto py-5 border-2 border-[#141414] transition-all group ${
+                      claim.paymentprocess !== 'Yes' || claim.paymentrelease === 'Yes'
+                        ? 'bg-slate-100 opacity-50 grayscale cursor-not-allowed' 
+                        : 'bg-purple-50 hover:bg-purple-100 shadow-[4px_4px_0px_0px_rgba(147,51,234,1)] active:shadow-none hover:-translate-y-1'
+                    }`}
+                    onClick={() => onAction('RELEASE', getActionData())}
+                    disabled={claim.paymentprocess !== 'Yes' || claim.paymentrelease === 'Yes'}
+                  >
+                    <CheckCircle2 className={`w-8 h-8 mb-2 ${claim.paymentprocess !== 'Yes' || claim.paymentrelease === 'Yes' ? 'text-slate-400' : 'text-purple-600 group-hover:scale-110 transition-transform'}`} />
+                    <span className="text-[10px] font-black uppercase text-center leading-tight">03. Final<br/>Release</span>
+                  </Button>
+                  
+                  <div className="flex flex-col justify-center items-center p-4 bg-slate-900 text-white rounded-xl border-4 border-[#141414] shadow-[4px_4px_0px_0px_rgba(20,20,20,0.4)]">
+                    <span className="text-[8px] font-black opacity-50 uppercase tracking-[0.2em] mb-1">Current State</span>
+                    <div className="flex items-center gap-2">
+                       {claim.paymentrelease === 'Yes' && <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />}
+                       <span className="text-[14px] font-black uppercase tracking-tighter">
+                        {claim.paymentrelease === 'Yes' ? 'Settled' : 
+                         claim.paymentprocess === 'Yes' ? 'Processed' :
+                         claim.approved === 'Yes' ? 'Approved' : 'Pending'}
+                      </span>
+                    </div>
+                    <p className="text-[7px] font-mono mt-2 opacity-40 uppercase tracking-widest">
+                       Ref: {claim.submissionid?.slice(-8)}
+                    </p>
+                  </div>
+                </div>
               </div>
             </div>
           </div>

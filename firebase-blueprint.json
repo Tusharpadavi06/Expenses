@@ -1,0 +1,63 @@
+{
+  "entities": {
+    "admin": {
+      "title": "Admin",
+      "description": "Administrator profile with PIN access",
+      "type": "object",
+      "properties": {
+        "pin": { "type": "string", "description": "Security PIN for authentication" },
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" }
+      },
+      "required": ["pin", "name", "email"]
+    },
+    "claim": {
+      "title": "Claim",
+      "description": "An expense claim submission",
+      "type": "object",
+      "properties": {
+        "submissionId": { "type": "string" },
+        "salespersonName": { "type": "string" },
+        "employeeEmail": { "type": "string", "format": "email" },
+        "branchName": { "type": "string" },
+        "grandTotal": { "type": "number" },
+        "status": { "type": "string", "enum": ["PENDING", "APPROVED", "REMARKED", "REJECTED", "PROCESSED", "RELEASED"] },
+        "adminRemark": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "approvedAt": { "type": "string", "format": "date-time" },
+        "approvedBy": { "type": "string" },
+        "mailSent": { "type": "boolean" }
+      },
+      "required": ["submissionId", "salespersonName", "employeeEmail", "branchName", "grandTotal", "status"]
+    },
+    "claimItem": {
+      "title": "ClaimItem",
+      "description": "Individual expense item within a claim",
+      "type": "object",
+      "properties": {
+        "category": { "type": "string" },
+        "itemDate": { "type": "string" },
+        "fromLoc": { "type": "string" },
+        "toLoc": { "type": "string" },
+        "amount": { "type": "number" },
+        "attachmentLink": { "type": "string" },
+        "remark": { "type": "string" }
+      },
+      "required": ["category", "itemDate", "amount"]
+    }
+  },
+  "firestore": {
+    "/admins/{adminId}": {
+      "schema": "admin",
+      "description": "Admin profiles"
+    },
+    "/claims/{claimId}": {
+      "schema": "claim",
+      "description": "Main claim documents"
+    },
+    "/claims/{claimId}/items/{itemId}": {
+      "schema": "claimItem",
+      "description": "Line items for a claim"
+    }
+  }
+}

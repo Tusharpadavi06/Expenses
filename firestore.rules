@@ -1,0 +1,82 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helpers ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isEmailVerified() && (
+        request.auth.token.email == 'tushpadavi1@gmail.com' ||
+        get(/databases/$(database)/documents/admins/$(request.auth.uid)).data != null
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- Validation Blueprints ---
+
+    function isValidAdmin(data) {
+      return data.keys().hasAll(['pin', 'name', 'email']) &&
+             data.keys().size() == 3 &&
+             data.pin is string && data.pin.size() <= 20 &&
+             data.name is string && data.name.size() <= 100 &&
+             data.email is string && data.email.size() <= 100;
+    }
+
+    function isValidClaim(data) {
+      return data.keys().hasAll(['submissionId', 'salespersonName', 'employeeEmail', 'branchName', 'grandTotal', 'status']) &&
+             data.submissionId is string && data.submissionId.size() <= 50 &&
+             data.salespersonName is string && data.salespersonName.size() <= 100 &&
+             data.employeeEmail is string && data.employeeEmail.size() <= 100 &&
+             data.branchName is string && data.branchName.size() <= 100 &&
+             data.grandTotal is number &&
+             data.status in ['PENDING', 'APPROVED', 'REMARKED', 'REJECTED', 'PROCESSED', 'RELEASED'];
+    }
+
+    function isValidClaimItem(data) {
+      return data.keys().hasAll(['category', 'itemDate', 'amount']) &&
+             data.category is string && data.category.size() <= 50 &&
+             data.itemDate is string && data.itemDate.size() <= 20 &&
+             data.amount is number;
+    }
+
+    // --- Collections ---
+
+    match /admins/{adminId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /claims/{claimId} {
+      allow read: if isAdmin();
+      allow create: if isValidClaim(incoming());
+      allow update: if isAdmin() && isValidClaim(incoming());
+      
+      match /items/{itemId} {
+        allow read: if isAdmin();
+        allow create: if isValidClaimItem(incoming());
+        allow update: if isAdmin() && isValidClaimItem(incoming());
+      }
+    }
+  }
+}
