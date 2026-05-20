@@ -219,17 +219,28 @@ export default function App() {
   const fetchClaims = async () => {
     try {
       const res = await fetch('/api/claims');
+      if (!res.ok) {
+        try {
+          const errData = await res.json();
+          toast.error(`Failed to load claims: ${errData.error || res.statusText}`);
+        } catch {
+          const text = await res.text();
+          const cleanText = text.slice(0, 100);
+          toast.error(`Server Error (${res.status}): ${cleanText}... Please check /api/diagnose for diagnostics.`);
+        }
+        setClaims([]);
+        return;
+      }
       const data = await res.json();
       if (Array.isArray(data)) {
         setClaims(data);
       } else {
         console.error('API did not return an array:', data);
         setClaims([]);
-        if (data.error) toast.error(`Error: ${data.error}`);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
-      toast.error('Failed to load claims');
+      toast.error(`Connection failed: ${error.message || error}`);
     }
   };
 
@@ -253,6 +264,7 @@ export default function App() {
           branchHeadEmail: selectedBranch?.headEmail
         })
       });
+
       if (res.ok) {
         toast.success('Claim submitted successfully!');
         setFormData({
@@ -270,9 +282,19 @@ export default function App() {
           attachment: '',
           remark: ''
         }]);
+      } else {
+        try {
+          const errData = await res.json();
+          toast.error(`Submission failed: ${errData.error || res.statusText}`);
+        } catch {
+          const text = await res.text();
+          const cleanText = text.slice(0, 100);
+          toast.error(`Submission Server Error (${res.status}): ${cleanText}... Please check /api/diagnose for diagnostics.`);
+        }
       }
-    } catch (error) {
-      toast.error('Submission failed');
+    } catch (error: any) {
+      console.error(error);
+      toast.error(`Submission connection failed: ${error.message || error}`);
     } finally {
       setLoading(false);
     }
@@ -299,9 +321,19 @@ export default function App() {
       if (res.ok) {
         toast.success(`Action ${action} successful`);
         fetchClaims();
+      } else {
+        try {
+          const errData = await res.json();
+          toast.error(`Action ${action} failed: ${errData.error || res.statusText}`);
+        } catch {
+          const text = await res.text();
+          const cleanText = text.slice(0, 100);
+          toast.error(`Action Error (${res.status}): ${cleanText}... Please check /api/diagnose for diagnostics.`);
+        }
       }
-    } catch (error) {
-      toast.error('Action failed');
+    } catch (error: any) {
+      console.error(error);
+      toast.error(`Action connection failed: ${error.message || error}`);
     } finally {
       setLoading(false);
     }

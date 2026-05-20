@@ -10,24 +10,35 @@ import fs from "fs";
 
 dotenv.config();
 
+// --- Error Logging Utility ---
+const logErrorToFile = (context: string, err: any, extra?: any) => {
+  try {
+    const logPath = path.join(process.cwd(), "error_logs.txt");
+    const timestamp = new Date().toISOString();
+    const errorMessage = err instanceof Error ? err.stack || err.message : String(err);
+    const extraStr = extra ? `\nExtra Data: ${JSON.stringify(extra, null, 2)}` : "";
+    const entry = `[${timestamp}] CONTEXT: ${context}\nERROR: ${errorMessage}${extraStr}\n---------------------------------------\n`;
+    fs.appendFileSync(logPath, entry, "utf-8");
+  } catch (e) {
+    console.error("Failed to write to error_logs.txt", e);
+  }
+};
+
 // --- Firebase Admin Initialization ---
-let firebaseDatabaseId: string | undefined = undefined;
+let firebaseProjectId = process.env.FIREBASE_PROJECT_ID;
+let firebaseDatabaseId = process.env.FIREBASE_DATABASE_ID;
 
 try {
-  let firebaseProjectId = process.env.FIREBASE_PROJECT_ID;
-
-  try {
+  // If FIREBASE_PROJECT_ID is not provided in env, fall back to sandbox appletconfig
+  if (!firebaseProjectId) {
     const configPath = path.join(process.cwd(), "firebase-applet-config.json");
     if (fs.existsSync(configPath)) {
       const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-      // Default to applet config project ID if env project ID is missing or set to the old tutorial/example project
-      if (!firebaseProjectId || firebaseProjectId === "expenses-e82d5") {
-        firebaseProjectId = config.projectId;
+      firebaseProjectId = config.projectId;
+      if (!firebaseDatabaseId) {
+        firebaseDatabaseId = config.firestoreDatabaseId;
       }
-      firebaseDatabaseId = config.firestoreDatabaseId;
     }
-  } catch (err) {
-    console.error("Failed to read firebase-applet-config.json for Server:", err);
   }
 
   const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim();
@@ -60,7 +71,7 @@ try {
 // --- Firebase Admin Instance Proxy (Lazy Loaded to prevent module-load crashes on Vercel) ---
 const db = new Proxy({} as admin.firestore.Firestore, {
   get(target, prop) {
-    const instance = firebaseDatabaseId ? getFirestore(firebaseDatabaseId) : getFirestore();
+    const instance = (firebaseDatabaseId && firebaseDatabaseId !== "(default)") ? getFirestore(firebaseDatabaseId) : getFirestore();
     const val = Reflect.get(instance, prop);
     return typeof val === "function" ? val.bind(instance) : val;
   }
@@ -110,10 +121,10 @@ const SHEET_ID = process.env.GOOGLE_SHEET_ID || "1L6iVHvBuknqum6lFf26BAp1_wrEwyy
 const FOLDER_ID = process.env.GOOGLE_DRIVE_FOLDER_ID;
 
 const HEADERS = [
-  "Timestamp", "Submission ID", "Branch", "Name", "Category", 
-  "Date", "From", "To", "Amount", "Attachment", "Remark", 
+  "Timestamp", "Submission ID", "Branch Name", "Salesperson Name", "Expense Category", 
+  "Item Date", "From Location", "To Location", "Amount", "Attachment Link", "Item Remark", 
   "Grand Total", "Admin Remark", "Mail Sent", "Approved", 
-  "Approved Details", "Payment Process", "Processed By", 
+  "Approved Timestamp", "Payment Process", "Processed By", 
   "Status", "Payment Release", "Released By"
 ];
 
@@ -286,18 +297,18 @@ app.post("/api/claim", async (req, res) => {
     }));
 
     const rows = processedItems.map((item: any) => [
-      timestamp, 
-      submissionId, 
-      branchName, 
-      salespersonName, 
-      item.category, 
-      item.itemDate, 
-      item.fromLoc, 
-      item.toLoc, 
-      item.amount, 
-      item.attachment, 
-      item.remark, 
-      grandTotal,
+      timestamp || "", 
+      submissionId || "", 
+      branchName || "", 
+      salespersonName || "", 
+      item.category || "", 
+      item.itemDate || "", 
+      item.fromLoc || "", 
+      item.toLoc || "", 
+      item.amount || "", 
+      item.attachment || "", 
+      item.remark || "", 
+      grandTotal || 0,
       "", // Admin Remark
       "No", // Mail Sent
       "No", // Approved
@@ -415,8 +426,83 @@ app.post("/api/claim", async (req, res) => {
     res.json({ success: true, submissionId });
   } catch (error: any) {
     console.error("Submit Error:", error);
+    logErrorToFile("Submit Claim API", error, { body: req.body });
     res.status(500).json({ error: error.message });
   }
+});
+
+// --- Diagnostics Endpoint for Vercel Deployment Troubleshooting ---
+app.get("/api/diagnose", async (req, res) => {
+  const report: any = {
+    timestamp: new Date().toISOString(),
+    environment: {
+      isVercel: !!process.env.VERCEL,
+      nodeEnv: process.env.NODE_ENV || "not set",
+    },
+    googleCredentials: {
+      emailConfigured: !!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+      emailLength: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.length || 0,
+      emailValue: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL ? `${process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL.slice(0, 10)}...` : "missing",
+      keyConfigured: !!process.env.GOOGLE_PRIVATE_KEY,
+      keyLength: process.env.GOOGLE_PRIVATE_KEY?.length || 0,
+      keyStartsWithBegin: process.env.GOOGLE_PRIVATE_KEY ? process.env.GOOGLE_PRIVATE_KEY.includes("-----BEGIN PRIVATE KEY-----") : false,
+      keyEndsWithEnd: process.env.GOOGLE_PRIVATE_KEY ? process.env.GOOGLE_PRIVATE_KEY.includes("-----END PRIVATE KEY-----") : false,
+      keyContainsRawNewlines: process.env.GOOGLE_PRIVATE_KEY ? process.env.GOOGLE_PRIVATE_KEY.includes("\n") : false,
+      keyContainsEscapedNewlines: process.env.GOOGLE_PRIVATE_KEY ? process.env.GOOGLE_PRIVATE_KEY.includes("\\n") : false,
+      spreadsheetIdConfigured: !!process.env.GOOGLE_SHEET_ID,
+      spreadsheetId: SHEET_ID,
+    },
+    firebaseConfig: {
+      projectIdConfigured: !!process.env.FIREBASE_PROJECT_ID,
+      projectId: process.env.FIREBASE_PROJECT_ID || "missing",
+      databaseId: firebaseDatabaseId || "default",
+    },
+    smtpConfig: {
+      smtpHost: process.env.SMTP_HOST || "smtp.gmail.com",
+      smtpUserConfigured: !!process.env.SMTP_USER,
+      smtpUser: process.env.SMTP_USER ? `${process.env.SMTP_USER.slice(0, 5)}...` : "missing",
+      smtpPassConfigured: !!process.env.SMTP_PASS,
+    },
+    checks: {}
+  };
+
+  // Check 1: Google Auth & Sheets connection
+  try {
+    const sheets = await getSheetsClient();
+    const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID });
+    report.checks.googleSheets = {
+      status: "success",
+      title: spreadsheet.data.properties?.title || "No Title",
+      sheetsCount: spreadsheet.data.sheets?.length || 0,
+      sheetNames: spreadsheet.data.sheets?.map(s => s.properties?.title)
+    };
+  } catch (err: any) {
+    report.checks.googleSheets = {
+      status: "failed",
+      error: err.message,
+      code: err.code,
+      details: err.response?.data?.error || err.toString()
+    };
+  }
+
+  // Check 2: Firestore Admin connection
+  try {
+    const testDoc = await db.collection("claims").limit(1).get();
+    report.checks.firestore = {
+      status: "success",
+      documentsFetched: testDoc.size
+    };
+  } catch (err: any) {
+    report.checks.firestore = {
+      status: "failed",
+      error: err.message,
+      details: err.toString()
+    };
+  }
+
+  // Decide overall status code
+  const hasFailedCheck = Object.values(report.checks).some((c: any) => c.status === "failed");
+  res.status(hasFailedCheck ? 500 : 200).json(report);
 });
 
 // 2. Get Claims for Admin
@@ -446,6 +532,18 @@ app.get("/api/claims", async (req, res) => {
           const key = header.toLowerCase().replace(/ /g, "");
           obj[key] = row[i] || "";
         });
+
+        // Dynamic backwards compatibility mapping for simple vs full headers
+        if (obj.branch && !obj.branchname) obj.branchname = obj.branch;
+        if (obj.name && !obj.salespersonname) obj.salespersonname = obj.name;
+        if (obj.category && !obj.expensecategory) obj.expensecategory = obj.category;
+        if (obj.date && !obj.itemdate) obj.itemdate = obj.date;
+        if (obj.from && !obj.fromlocation) obj.fromlocation = obj.from;
+        if (obj.to && !obj.tolocation) obj.tolocation = obj.to;
+        if (obj.attachment && !obj.attachmentlink) obj.attachmentlink = obj.attachment;
+        if (obj.remark && !obj.itemremark) obj.itemremark = obj.remark;
+        if (obj.approveddetails && !obj.approvedtimestamp) obj.approvedtimestamp = obj.approveddetails;
+
         // Restore email from map
         obj.employeeemail = emailMap[obj.submissionid] || "";
         return obj;
