@@ -1,6 +1,5 @@
 import express from "express";
 import path from "path";
-import { createServer as createViteServer } from "vite";
 import { google } from "googleapis";
 import nodemailer from "nodemailer";
 import dotenv from "dotenv";
@@ -25,7 +24,14 @@ try {
   }
 }
 
-const db = admin.firestore();
+// --- Firebase Admin Instance Proxy (Lazy Loaded to prevent module-load crashes on Vercel) ---
+const db = new Proxy({} as admin.firestore.Firestore, {
+  get(target, prop) {
+    const instance = admin.firestore();
+    const val = Reflect.get(instance, prop);
+    return typeof val === "function" ? val.bind(instance) : val;
+  }
+});
 const app = express();
 const PORT = 3000;
 
@@ -566,6 +572,7 @@ app.post("/api/admin/action", async (req, res) => {
 // --- Vite Infrastructure ---
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -582,4 +589,8 @@ async function startServer() {
   });
 }
 
-startServer();
+if (!process.env.VERCEL) {
+  startServer();
+}
+
+export default app;
