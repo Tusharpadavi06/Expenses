@@ -18,7 +18,7 @@ const config = {
 // Initialize and export services with determined configuration
 const app = initializeApp(config);
 export const auth = getAuth(app);
-export const db = getFirestore(app, config.firestoreDatabaseId); // Use correct database ID
+export const db = (config.firestoreDatabaseId && config.firestoreDatabaseId !== '(default)') ? getFirestore(app, config.firestoreDatabaseId) : getFirestore(app); // Use correct database ID
 export const googleProvider = new GoogleAuthProvider();
 
 export { signInWithPopup, onAuthStateChanged };

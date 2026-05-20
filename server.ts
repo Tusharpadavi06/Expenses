@@ -25,8 +25,8 @@ const logErrorToFile = (context: string, err: any, extra?: any) => {
 };
 
 // --- Firebase Admin Initialization ---
-let firebaseProjectId = process.env.FIREBASE_PROJECT_ID;
-let firebaseDatabaseId = process.env.FIREBASE_DATABASE_ID;
+let firebaseProjectId = process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID;
+let firebaseDatabaseId = process.env.FIREBASE_DATABASE_ID || process.env.VITE_FIREBASE_DATABASE_ID;
 
 try {
   // If FIREBASE_PROJECT_ID is not provided in env, fall back to sandbox appletconfig
