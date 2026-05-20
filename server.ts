@@ -5,16 +5,49 @@ import nodemailer from "nodemailer";
 import dotenv from "dotenv";
 import stream from "stream";
 import admin from "firebase-admin";
+import { getFirestore } from "firebase-admin/firestore";
+import fs from "fs";
 
 dotenv.config();
 
 // --- Firebase Admin Initialization ---
+let firebaseDatabaseId: string | undefined = undefined;
+
 try {
-  if (process.env.FIREBASE_PROJECT_ID) {
-    admin.initializeApp({
-      projectId: process.env.FIREBASE_PROJECT_ID,
-    });
-    console.log("Firebase Admin initialized successfully.");
+  let firebaseProjectId = process.env.FIREBASE_PROJECT_ID;
+
+  try {
+    const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+    if (fs.existsSync(configPath)) {
+      const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+      // Default to applet config project ID if env project ID is missing or set to the old tutorial/example project
+      if (!firebaseProjectId || firebaseProjectId === "expenses-e82d5") {
+        firebaseProjectId = config.projectId;
+      }
+      firebaseDatabaseId = config.firestoreDatabaseId;
+    }
+  } catch (err) {
+    console.error("Failed to read firebase-applet-config.json for Server:", err);
+  }
+
+  const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim();
+  let privateKey = process.env.GOOGLE_PRIVATE_KEY?.trim();
+
+  if (firebaseProjectId) {
+    const options: any = {
+      projectId: firebaseProjectId,
+    };
+
+    if (clientEmail && privateKey) {
+      options.credential = admin.credential.cert({
+        projectId: firebaseProjectId,
+        clientEmail: clientEmail,
+        privateKey: privateKey.replace(/^"|"$/g, "").replace(/\\n/g, "\n"),
+      });
+    }
+
+    admin.initializeApp(options);
+    console.log(`Firebase Admin initialized successfully for project: ${firebaseProjectId}`);
   } else {
     console.warn("FIREBASE_PROJECT_ID missing. Firestore operations will fail.");
   }
@@ -27,7 +60,7 @@ try {
 // --- Firebase Admin Instance Proxy (Lazy Loaded to prevent module-load crashes on Vercel) ---
 const db = new Proxy({} as admin.firestore.Firestore, {
   get(target, prop) {
-    const instance = admin.firestore();
+    const instance = firebaseDatabaseId ? getFirestore(firebaseDatabaseId) : getFirestore();
     const val = Reflect.get(instance, prop);
     return typeof val === "function" ? val.bind(instance) : val;
   }
