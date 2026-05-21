@@ -67,6 +67,15 @@ interface Claim {
   branchheademail?: string;
 }
 
+// --- Helper function to safely parse response ---
+const parseResponse = async (response: Response) => {
+  const contentType = response.headers.get('content-type');
+  if (contentType?.includes('application/json')) {
+    return await response.json();
+  }
+  return await response.text();
+};
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('submit');
   const [user, setUser] = useState<User | null>(null);
@@ -220,13 +229,12 @@ export default function App() {
     try {
       const res = await fetch('/api/claims');
       if (!res.ok) {
-        const text = await res.text();
         try {
-          const errData = JSON.parse(text);
-          toast.error(`Failed to load claims: ${errData.error || res.statusText}`);
+          const data = await parseResponse(res);
+          const message = typeof data === 'object' && data.error ? data.error : res.statusText;
+          toast.error(`Failed to load claims: ${message}`);
         } catch {
-          const cleanText = text.slice(0, 100);
-          toast.error(`Server Error (${res.status}): ${cleanText}... Please check /api/diagnose for diagnostics.`);
+          toast.error(`Server Error (${res.status}). Please check /api/diagnose for diagnostics.`);
         }
         setClaims([]);
         return;
@@ -283,13 +291,12 @@ export default function App() {
           remark: ''
         }]);
       } else {
-        const text = await res.text();
         try {
-          const errData = JSON.parse(text);
-          toast.error(`Submission failed: ${errData.error || res.statusText}`);
+          const data = await parseResponse(res);
+          const message = typeof data === 'object' && data.error ? data.error : res.statusText;
+          toast.error(`Submission failed: ${message}`);
         } catch {
-          const cleanText = text.slice(0, 100);
-          toast.error(`Submission Server Error (${res.status}): ${cleanText}... Please check /api/diagnose for diagnostics.`);
+          toast.error(`Submission Server Error (${res.status}). Please check /api/diagnose for diagnostics.`);
         }
       }
     } catch (error: any) {
@@ -322,13 +329,12 @@ export default function App() {
         toast.success(`Action ${action} successful`);
         fetchClaims();
       } else {
-        const text = await res.text();
         try {
-          const errData = JSON.parse(text);
-          toast.error(`Action ${action} failed: ${errData.error || res.statusText}`);
+          const data = await parseResponse(res);
+          const message = typeof data === 'object' && data.error ? data.error : res.statusText;
+          toast.error(`Action ${action} failed: ${message}`);
         } catch {
-          const cleanText = text.slice(0, 100);
-          toast.error(`Action Error (${res.status}): ${cleanText}... Please check /api/diagnose for diagnostics.`);
+          toast.error(`Action Error (${res.status}). Please check /api/diagnose for diagnostics.`);
         }
       }
     } catch (error: any) {
@@ -569,11 +575,11 @@ export default function App() {
                         </Button>
                       </div>
                     ) : (
-                      <Button onClick={handleLogin} className="bg-blue-600 border-2 border-[#141414] shadow-[4px_4px_0px_0px_rgba(20,20,20,1)] hover:bg-blue-700 h-10 px-4 font-black uppercase text-xs italic">
+                      <Button onClick={handleLogin} className="bg-blue-600 border-2 border-[#141414] shadow-[4px_4px_0px_0px_rgba(20,20,20,1)] hover:bg-blue-700 h-10 px-4 font-black uppercase text-white">
                         <LogIn className="w-4 h-4 mr-2" /> Admin Sign In
                       </Button>
                     )}
-                    <Button onClick={fetchClaims} loading={loading} variant="outline" className="border-[#141414] border-2 shadow-[4px_4px_0px_0px_rgba(20,20,20,1)] bg-white h-10 font-black uppercase text-xs italic">
+                    <Button onClick={fetchClaims} disabled={loading} variant="outline" className="border-[#141414] border-2 shadow-[4px_4px_0px_0px_rgba(20,20,20,1)] bg-white h-10 font-black uppercase">
                       Refresh Data
                     </Button>
                   </div>
@@ -800,7 +806,7 @@ function AdminActionDialog({ claim, onAction, group, predefinedAdmin }: { claim:
     <Dialog>
       <DialogTrigger
         render={
-          <button className="inline-flex items-center justify-center rounded-md text-[10px] font-black uppercase border-2 border-[#141414] bg-white hover:bg-[#141414] hover:text-white h-8 px-4 transition-all shadow-[2px_2px_0px_0px_rgba(20,20,20,1)] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none">
+          <button className="inline-flex items-center justify-center rounded-md text-[10px] font-black uppercase border-2 border-[#141414] bg-white hover:bg-[#141414] hover:text-white h-8 px-4 transition-colors">
             Manage <ChevronRight className="w-3 h-3 ml-1" />
           </button>
         }
@@ -945,7 +951,7 @@ function AdminActionDialog({ claim, onAction, group, predefinedAdmin }: { claim:
                   className="border-slate-200 min-h-[90px] text-xs resize-none bg-white focus:border-[#141414] transition-all"
                 />
                 <Button 
-                  className="w-full bg-[#141414] hover:bg-blue-600 text-white text-[10px] h-9 font-black uppercase tracking-widest shadow-[4px_4px_0px_0px_rgba(20,20,20,0.1)] active:shadow-none active:translate-x-[1px] active:translate-y-[1px] transition-all"
+                  className="w-full bg-[#141414] hover:bg-blue-600 text-white text-[10px] h-9 font-black uppercase tracking-widest shadow-[4px_4px_0px_0px_rgba(20,20,20,0.1)] active:shadow-none"
                   disabled={!remark || !email}
                   onClick={() => onAction('REMARK', getActionData())}
                 >
@@ -1016,7 +1022,7 @@ function AdminActionDialog({ claim, onAction, group, predefinedAdmin }: { claim:
                         {claim.paymentrelease === 'Yes' ? 'Settled' : 
                          claim.paymentprocess === 'Yes' ? 'Processed' :
                          claim.approved === 'Yes' ? 'Approved' : 'Pending'}
-                      </span>
+                       </span>
                     </div>
                     <p className="text-[7px] font-mono mt-2 opacity-40 uppercase tracking-widest">
                        Ref: {claim.submissionid?.slice(-8)}
