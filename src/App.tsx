@@ -20,9 +20,6 @@ import {
   Plus,
   SendHorizontal
 } from 'lucide-react';
-import { 
-  auth, googleProvider, signInWithPopup, onAuthStateChanged, User 
-} from './lib/firebase';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -69,31 +66,83 @@ interface Claim {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('submit');
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<{ displayName: string; email: string } | null>(() => {
+    try {
+      const saved = localStorage.getItem('custom_admin_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
   const [claims, setClaims] = useState<Claim[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // Auth Listener
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-    });
-    return () => unsubscribe();
-  }, []);
+  // Authentication custom states
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [registerName, setRegisterName] = useState('');
+  const [registerEmail, setRegisterEmail] = useState('');
+  const [registerPassword, setRegisterPassword] = useState('');
+  const [authTab, setAuthTab] = useState('login');
 
-  const handleLogin = async () => {
+  const handleCustomLogin = async () => {
+    if (!loginEmail || !loginPassword) {
+      toast.error("Email and password are required.");
+      return;
+    }
     try {
-      await signInWithPopup(auth, googleProvider);
-      toast.success("Logged in successfully!");
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: loginEmail, password: loginPassword })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Authentication failed.");
+      }
+      const adminProfile = { displayName: data.user.name, email: data.user.email };
+      localStorage.setItem('custom_admin_user', JSON.stringify(adminProfile));
+      setUser(adminProfile);
+      toast.success(`Logged in successfully as ${data.user.name}!`);
+      setLoginEmail('');
+      setLoginPassword('');
     } catch (err: any) {
       console.error("Login Error:", err);
-      toast.error("Authentication failed.");
+      toast.error(err.message || "Invalid credentials.");
     }
   };
 
-  const handleLogout = async () => {
-    await auth.signOut();
-    toast.success("Logged out.");
+  const handleCustomRegister = async () => {
+    if (!registerName || !registerEmail || !registerPassword) {
+      toast.error("All fields are required for registration.");
+      return;
+    }
+    try {
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: registerName, email: registerEmail, password: registerPassword })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Registration failed.");
+      }
+      toast.success("Account created successfully! Switching to Login tab.");
+      setLoginEmail(registerEmail);
+      setRegisterName('');
+      setRegisterEmail('');
+      setRegisterPassword('');
+      setAuthTab('login'); // Automatically switch to Login tab
+    } catch (err: any) {
+      console.error("Register Error:", err);
+      toast.error(err.message || "Registration failed.");
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('custom_admin_user');
+    setUser(null);
+    toast.success("Logged out successfully.");
   };
   const [filters, setFilters] = useState({
     branch: 'all',
@@ -219,8 +268,19 @@ export default function App() {
   const fetchClaims = async () => {
     try {
       const res = await fetch('/api/claims');
+      const clone = res.clone();
       if (!res.ok) {
-        const text = await res.text();
+        let text = "";
+        try {
+          // Attempt clone first to bypass any extension interference on original
+          text = await clone.text();
+        } catch {
+          try {
+            text = await res.text();
+          } catch {
+            text = "Error reading response body";
+          }
+        }
         try {
           const errData = JSON.parse(text);
           toast.error(`Failed to load claims: ${errData.error || res.statusText}`);
@@ -231,7 +291,18 @@ export default function App() {
         setClaims([]);
         return;
       }
-      const data = await res.json();
+      
+      let data;
+      try {
+        data = await res.json();
+      } catch {
+        try {
+          data = await clone.json();
+        } catch (e: any) {
+          throw new Error("Failed to parse JSON response: " + e.message);
+        }
+      }
+
       if (Array.isArray(data)) {
         setClaims(data);
       } else {
@@ -265,6 +336,7 @@ export default function App() {
         })
       });
 
+      const clone = res.clone();
       if (res.ok) {
         toast.success('Claim submitted successfully!');
         setFormData({
@@ -283,7 +355,16 @@ export default function App() {
           remark: ''
         }]);
       } else {
-        const text = await res.text();
+        let text = "";
+        try {
+          text = await clone.text();
+        } catch {
+          try {
+            text = await res.text();
+          } catch {
+            text = "Error reading response body";
+          }
+        }
         try {
           const errData = JSON.parse(text);
           toast.error(`Submission failed: ${errData.error || res.statusText}`);
@@ -318,11 +399,22 @@ export default function App() {
           data: { ...claim, ...extraData } 
         })
       });
+
+      const clone = res.clone();
       if (res.ok) {
         toast.success(`Action ${action} successful`);
         fetchClaims();
       } else {
-        const text = await res.text();
+        let text = "";
+        try {
+          text = await clone.text();
+        } catch {
+          try {
+            text = await res.text();
+          } catch {
+            text = "Error reading response body";
+          }
+        }
         try {
           const errData = JSON.parse(text);
           toast.error(`Action ${action} failed: ${errData.error || res.statusText}`);
@@ -569,9 +661,101 @@ export default function App() {
                         </Button>
                       </div>
                     ) : (
-                      <Button onClick={handleLogin} className="bg-blue-600 border-2 border-[#141414] shadow-[4px_4px_0px_0px_rgba(20,20,20,1)] hover:bg-blue-700 h-10 px-4 font-black uppercase text-xs italic">
-                        <LogIn className="w-4 h-4 mr-2" /> Admin Sign In
-                      </Button>
+                      <Dialog>
+                        <DialogTrigger
+                          render={
+                            <Button className="bg-blue-600 border-2 border-[#141414] shadow-[4px_4px_0px_0px_rgba(20,20,20,1)] hover:bg-blue-700 h-10 px-4 font-black uppercase text-xs italic">
+                              <LogIn className="w-4 h-4 mr-2" /> Admin Sign In
+                            </Button>
+                          }
+                        />
+                        <DialogContent className="max-w-md border-2 border-[#141414] shadow-[8px_8px_0px_0px_rgba(20,20,20,1)] p-6 bg-white rounded-xl">
+                          <DialogHeader>
+                            <DialogTitle className="text-xl font-black uppercase italic tracking-tight">
+                              Administrative Entry
+                            </DialogTitle>
+                            <DialogDescription className="font-serif italic text-xs text-slate-500">
+                              Access the claims dashboard using your administrator credentials or register an account.
+                            </DialogDescription>
+                          </DialogHeader>
+                          <Tabs value={authTab} onValueChange={setAuthTab} className="w-full mt-4">
+                            <TabsList className="grid grid-cols-2 bg-slate-100 p-1 rounded-lg border border-[#141414]/10">
+                              <TabsTrigger value="login" className="font-black uppercase text-xs">Login</TabsTrigger>
+                              <TabsTrigger value="register" className="font-black uppercase text-xs">Register</TabsTrigger>
+                            </TabsList>
+                            <TabsContent value="login" className="space-y-4 pt-4 text-left">
+                              <div className="space-y-1">
+                                <Label className="text-[10px] font-black uppercase">Email Address</Label>
+                                <Input 
+                                  type="email" 
+                                  placeholder="admin@expense.com" 
+                                  value={loginEmail} 
+                                  onChange={(e) => setLoginEmail(e.target.value)}
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <Label className="text-[10px] font-black uppercase">Password</Label>
+                                <Input 
+                                  type="password" 
+                                  placeholder="••••••••" 
+                                  value={loginPassword} 
+                                  onChange={(e) => setLoginPassword(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') handleCustomLogin();
+                                  }}
+                                />
+                                <span className="text-[9px] text-slate-400 italic block mt-1">
+                                  * Quick Demo Login: Use <b>admin@expense.com</b> with password <b>admin123</b>
+                                </span>
+                              </div>
+                              <Button 
+                                onClick={handleCustomLogin} 
+                                className="w-full bg-[#141414] hover:bg-slate-800 text-white uppercase font-black text-xs h-10 border-2 border-[#141414] shadow-[4px_4px_0px_0px_rgba(20,20,20,1)]"
+                              >
+                                Sign In
+                              </Button>
+                            </TabsContent>
+                            <TabsContent value="register" className="space-y-4 pt-4 text-left">
+                              <div className="space-y-1">
+                                <Label className="text-[10px] font-black uppercase">Full Name</Label>
+                                <Input 
+                                  type="text" 
+                                  placeholder="John Doe" 
+                                  value={registerName} 
+                                  onChange={(e) => setRegisterName(e.target.value)}
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <Label className="text-[10px] font-black uppercase">Email Address</Label>
+                                <Input 
+                                  type="email" 
+                                  placeholder="john@example.com" 
+                                  value={registerEmail} 
+                                  onChange={(e) => setRegisterEmail(e.target.value)}
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <Label className="text-[10px] font-black uppercase">Password</Label>
+                                <Input 
+                                  type="password" 
+                                  placeholder="••••••••" 
+                                  value={registerPassword} 
+                                  onChange={(e) => setRegisterPassword(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') handleCustomRegister();
+                                  }}
+                                />
+                              </div>
+                              <Button 
+                                onClick={handleCustomRegister} 
+                                className="w-full bg-blue-600 hover:bg-blue-700 text-white uppercase font-black text-xs h-10 border-2 border-[#141414] shadow-[4px_4px_0px_0px_rgba(20,20,20,1)]"
+                              >
+                                Create Account
+                              </Button>
+                            </TabsContent>
+                          </Tabs>
+                        </DialogContent>
+                      </Dialog>
                     )}
                     <Button onClick={fetchClaims} loading={loading} variant="outline" className="border-[#141414] border-2 shadow-[4px_4px_0px_0px_rgba(20,20,20,1)] bg-white h-10 font-black uppercase text-xs italic">
                       Refresh Data
