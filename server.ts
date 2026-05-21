@@ -1,6 +1,5 @@
 import express from "express";
 import path from "path";
-import { google } from "googleapis";
 import nodemailer from "nodemailer";
 import dotenv from "dotenv";
 import stream from "stream";
@@ -158,7 +157,17 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // --- Google Client Helper ---
-const getGoogleAuth = () => {
+let googleApisInstance: any = null;
+const getGoogleApis = async () => {
+  if (!googleApisInstance) {
+    const { google } = await import("googleapis");
+    googleApisInstance = google;
+  }
+  return googleApisInstance;
+};
+
+const getGoogleAuth = async () => {
+  const google = await getGoogleApis();
   const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim();
   let privateKey = process.env.GOOGLE_PRIVATE_KEY?.trim();
 
@@ -183,12 +192,14 @@ const getGoogleAuth = () => {
 };
 
 const getSheetsClient = async () => {
-  const auth = await getGoogleAuth().getClient();
+  const auth = await (await getGoogleAuth()).getClient();
+  const google = await getGoogleApis();
   return google.sheets({ version: "v4", auth: auth as any });
 };
 
 const getDriveClient = async () => {
-  const auth = await getGoogleAuth().getClient();
+  const auth = await (await getGoogleAuth()).getClient();
+  const google = await getGoogleApis();
   return google.drive({ version: "v3", auth: auth as any });
 };
 
