@@ -5,6 +5,7 @@ import dotenv from "dotenv";
 import stream from "stream";
 import admin from "firebase-admin";
 import fs from "fs";
+import { google } from "googleapis";
 
 dotenv.config();
 
@@ -157,17 +158,7 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // --- Google Client Helper ---
-let googleApisInstance: any = null;
-const getGoogleApis = async () => {
-  if (!googleApisInstance) {
-    const { google } = await import("googleapis");
-    googleApisInstance = google;
-  }
-  return googleApisInstance;
-};
-
 const getGoogleAuth = async () => {
-  const google = await getGoogleApis();
   const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim();
   let privateKey = process.env.GOOGLE_PRIVATE_KEY?.trim();
 
@@ -193,13 +184,11 @@ const getGoogleAuth = async () => {
 
 const getSheetsClient = async () => {
   const auth = await (await getGoogleAuth()).getClient();
-  const google = await getGoogleApis();
   return google.sheets({ version: "v4", auth: auth as any });
 };
 
 const getDriveClient = async () => {
   const auth = await (await getGoogleAuth()).getClient();
-  const google = await getGoogleApis();
   return google.drive({ version: "v3", auth: auth as any });
 };
 
@@ -725,9 +714,20 @@ app.get("/api/diagnose", async (req, res) => {
       documentsFetched: testDoc.size
     };
   } catch (err: any) {
+    let suggestion = "";
+    const saEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || "";
+    const fsProj = process.env.FIREBASE_PROJECT_ID || "";
+    if (saEmail && fsProj) {
+      const match = saEmail.match(/@([^.]+)/);
+      const saProj = match ? match[1] : "";
+      if (saProj && saProj !== fsProj) {
+        suggestion = `Project ID mismatch! Your Google Service Account belongs to project "${saProj}", but FIREBASE_PROJECT_ID is "${fsProj}". To fix this 7 PERMISSION_DENIED error, please go to the GCP/Firebase Console of project "${fsProj}", under IAM & Admin, and add the principal "${saEmail}" with the role "Cloud Datastore User" or "Cloud Datastore Owner".`;
+      }
+    }
     report.checks.firestore = {
       status: "failed",
       error: err.message,
+      suggestion: suggestion || "Make sure your service account has rights to access Firestore in the console.",
       details: err.toString()
     };
   }
