@@ -5,7 +5,6 @@ import nodemailer from "nodemailer";
 import dotenv from "dotenv";
 import stream from "stream";
 import admin from "firebase-admin";
-import { getFirestore } from "firebase-admin/firestore";
 import fs from "fs";
 
 dotenv.config();
@@ -87,7 +86,7 @@ const getFirestoreInstance = () => {
       } as any;
     }
     try {
-      firestoreInstance = (firebaseDatabaseId && firebaseDatabaseId !== "(default)") ? getFirestore(firebaseDatabaseId) : getFirestore();
+      firestoreInstance = (firebaseDatabaseId && firebaseDatabaseId !== "(default)") ? (admin.app() as any).firestore(firebaseDatabaseId) : admin.firestore();
     } catch (err) {
       console.error("Failed to fetch firestore instance:", err);
       throw err;
