@@ -204,11 +204,16 @@ const HEADERS = [
 ];
 
 // Helper to ensure a sheet exists and has headers
-const ensureSheetExists = async (sheets: any, spreadsheetId: string, title: string) => {
-  const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
-  const sheet = spreadsheet.data.sheets?.find((s: any) => s.properties?.title === title);
+const ensureSheetExists = async (sheets: any, spreadsheetId: string, title: string, existingTitles?: string[]) => {
+  let exists = false;
+  if (existingTitles) {
+    exists = existingTitles.includes(title);
+  } else {
+    const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
+    exists = (spreadsheet.data.sheets || []).some((s: any) => s.properties?.title === title);
+  }
 
-  if (!sheet) {
+  if (!exists) {
     await sheets.spreadsheets.batchUpdate({
       spreadsheetId,
       requestBody: {
@@ -232,6 +237,10 @@ const getEmailMapping = async (sheets: any, spreadsheetId: string) => {
   await ensureSheetExists(sheets, spreadsheetId, title);
   const response = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${title}!A:B` });
   const rows = response.data.values || [];
+  return getEmailMappingFromRows(rows);
+};
+
+const getEmailMappingFromRows = (rows: string[][]) => {
   const map: { [key: string]: string } = {};
   rows.forEach((row: string[]) => {
     if (row[0]) map[row[0]] = row[1];
@@ -744,20 +753,33 @@ app.get("/api/claims", async (req, res) => {
     try {
       const sheets = await getSheetsClient();
       const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID });
-      const sheetTitles = (spreadsheet.data.sheets || [])
-        .map(s => s.properties?.title)
-        .filter(title => title && title !== "_Mails_" && title !== "Sheet1");
+      const currentTitles = (spreadsheet.data.sheets || []).map(s => s.properties?.title || "");
+      const sheetTitles = currentTitles.filter(title => title && title !== "_Mails_" && title !== "Sheet1");
 
-      const emailMap = await getEmailMapping(sheets, SHEET_ID);
+      const hasMailsSheet = currentTitles.includes("_Mails_");
+      if (!hasMailsSheet) {
+        try {
+          await ensureSheetExists(sheets, SHEET_ID, "_Mails_", currentTitles);
+        } catch (e) {
+          console.warn("Could not create _Mails_ sheet:", e);
+        }
+      }
+
+      // Batch GET both "_Mails_" map sheet and all other branch sheets in a single API call
+      const ranges = ["_Mails_!A:B", ...sheetTitles.map(title => `${title}!A:U`)];
+      const batchResponse = await sheets.spreadsheets.values.batchGet({
+        spreadsheetId: SHEET_ID,
+        ranges,
+      });
+
+      const valueRanges = batchResponse.data.valueRanges || [];
+      const mailsRows = valueRanges[0]?.values || [];
+      const emailMap = getEmailMappingFromRows(mailsRows);
+
       let allClaims: any[] = [];
-
-      for (const title of sheetTitles) {
-        const response = await sheets.spreadsheets.values.get({
-          spreadsheetId: SHEET_ID,
-          range: `${title}!A:U`,
-        });
-        const rows = response.data.values || [];
-        if (rows.length < 2) continue;
+      sheetTitles.forEach((title, idx) => {
+        const rows = valueRanges[idx + 1]?.values || [];
+        if (rows.length < 2) return;
 
         const headers = rows[0];
         const data = rows.slice(1).map((row, index) => {
@@ -783,7 +805,7 @@ app.get("/api/claims", async (req, res) => {
           return obj;
         });
         allClaims = [...allClaims, ...data];
-      }
+      });
 
       // Merge with in-memory claims that aren't already fetched
       const mergedClaims = [...allClaims];

@@ -225,17 +225,86 @@ export default function App() {
     setItems(items.map(item => item.id === id ? { ...item, [field]: value } : item));
   };
 
-  const handleFileChange = (id: string, file: File | null) => {
+  const handleFileChange = async (id: string, file: File | null) => {
     if (!file) return;
-    
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const base64 = e.target?.result as string;
-      updateItem(id, 'fileData', base64);
-      updateItem(id, 'fileName', file.name);
-      updateItem(id, 'fileType', file.type);
-    };
-    reader.readAsDataURL(file);
+
+    // 1. If it's an image, perform client-side canvas compression
+    if (file.type.startsWith('image/')) {
+      try {
+        const compressedBase64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.readAsDataURL(file);
+          reader.onload = (event) => {
+            const img = new Image();
+            img.src = event.target?.result as string;
+            img.onload = () => {
+              const canvas = document.createElement("canvas");
+              let width = img.width;
+              let height = img.height;
+              const maxWidth = 1200;
+              const maxHeight = 1200;
+
+              // Fit to maximum bounding box
+              if (width > height) {
+                if (width > maxWidth) {
+                  height = Math.round((height * maxWidth) / width);
+                  width = maxWidth;
+                }
+              } else {
+                if (height > maxHeight) {
+                  width = Math.round((width * maxHeight) / height);
+                  height = maxHeight;
+                }
+              }
+
+              canvas.width = width;
+              canvas.height = height;
+              const ctx = canvas.getContext("2d");
+              if (!ctx) {
+                resolve(event.target?.result as string); // fallback
+                return;
+              }
+
+              ctx.drawImage(img, 0, 0, width, height);
+              // Export as high-compression JPEG (0.65 quality is indistinguishable but highly compressed)
+              const dataUrl = canvas.toDataURL("image/jpeg", 0.65);
+              resolve(dataUrl);
+            };
+            img.onerror = (e) => reject(e);
+          };
+          reader.onerror = (e) => reject(e);
+        });
+
+        updateItem(id, 'fileData', compressedBase64);
+        updateItem(id, 'fileName', file.name.replace(/\.[^/.]+$/, "") + ".jpg"); // force extension to jpg
+        updateItem(id, 'fileType', "image/jpeg");
+        toast.success("Image auto-compressed successfully for lightning-fast submission!");
+      } catch (err) {
+        console.error("Compression error, falling back to raw upload:", err);
+        // Fallback to reading file normally
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          updateItem(id, 'fileData', e.target?.result as string);
+          updateItem(id, 'fileName', file.name);
+          updateItem(id, 'fileType', file.type);
+        };
+        reader.readAsDataURL(file);
+      }
+    } else {
+      // 2. Non-image files (e.g. PDF). Enforce a strict 2.5MB limit to prevent Vercel 4.5MB request payload limit errors
+      if (file.size > 2.5 * 1024 * 1024) {
+        toast.error(`File size is too large (${(file.size / 1024 / 1024).toFixed(1)}MB). Please upload a PDF/Document smaller than 2.5MB.`);
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        updateItem(id, 'fileData', e.target?.result as string);
+        updateItem(id, 'fileName', file.name);
+        updateItem(id, 'fileType', file.type);
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
   const grandTotal = items.reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
