@@ -500,8 +500,8 @@ app.get("/api/diagnose", async (req, res) => {
     };
   }
 
-  // Decide overall status code
-  const hasFailedCheck = Object.values(report.checks).some((c: any) => c.status === "failed");
+  // Decide overall status code - only fail if critical Google Sheets connection fails
+  const hasFailedCheck = report.checks.googleSheets?.status === "failed";
   res.status(hasFailedCheck ? 500 : 200).json(report);
 });
 

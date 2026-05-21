@@ -220,11 +220,11 @@ export default function App() {
     try {
       const res = await fetch('/api/claims');
       if (!res.ok) {
+        const text = await res.text();
         try {
-          const errData = await res.json();
+          const errData = JSON.parse(text);
           toast.error(`Failed to load claims: ${errData.error || res.statusText}`);
         } catch {
-          const text = await res.text();
           const cleanText = text.slice(0, 100);
           toast.error(`Server Error (${res.status}): ${cleanText}... Please check /api/diagnose for diagnostics.`);
         }
@@ -283,11 +283,11 @@ export default function App() {
           remark: ''
         }]);
       } else {
+        const text = await res.text();
         try {
-          const errData = await res.json();
+          const errData = JSON.parse(text);
           toast.error(`Submission failed: ${errData.error || res.statusText}`);
         } catch {
-          const text = await res.text();
           const cleanText = text.slice(0, 100);
           toast.error(`Submission Server Error (${res.status}): ${cleanText}... Please check /api/diagnose for diagnostics.`);
         }
@@ -322,11 +322,11 @@ export default function App() {
         toast.success(`Action ${action} successful`);
         fetchClaims();
       } else {
+        const text = await res.text();
         try {
-          const errData = await res.json();
+          const errData = JSON.parse(text);
           toast.error(`Action ${action} failed: ${errData.error || res.statusText}`);
         } catch {
-          const text = await res.text();
           const cleanText = text.slice(0, 100);
           toast.error(`Action Error (${res.status}): ${cleanText}... Please check /api/diagnose for diagnostics.`);
         }
