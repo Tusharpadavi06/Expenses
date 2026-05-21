@@ -28,10 +28,6 @@ const logErrorToFile = (context: string, err: any, extra?: any) => {
 let firebaseProjectId = process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID;
 let firebaseDatabaseId = process.env.FIREBASE_DATABASE_ID || process.env.VITE_FIREBASE_DATABASE_ID;
 
-console.log("🔧 Initializing Firebase Admin...");
-console.log(`📦 Firebase Project ID: ${firebaseProjectId ? "✅ Set" : "❌ Missing"}`);
-console.log(`📦 Firebase Database ID: ${firebaseDatabaseId ? "✅ Set" : "❌ Missing"}`);
-
 try {
   // If FIREBASE_PROJECT_ID is not provided in env, fall back to sandbox appletconfig
   if (!firebaseProjectId) {
@@ -48,9 +44,6 @@ try {
   const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim();
   let privateKey = process.env.GOOGLE_PRIVATE_KEY?.trim();
 
-  console.log(`📧 Google Service Account Email: ${clientEmail ? "✅ Set" : "❌ Missing"}`);
-  console.log(`🔑 Google Private Key: ${privateKey ? "✅ Set" : "❌ Missing"}`);
-
   if (firebaseProjectId) {
     const options: any = {
       projectId: firebaseProjectId,
@@ -62,53 +55,32 @@ try {
         clientEmail: clientEmail,
         privateKey: privateKey.replace(/^"|"$/g, "").replace(/\\n/g, "\n"),
       });
-      console.log("✅ Service Account credentials loaded");
-    } else {
-      console.warn("⚠️ Service Account credentials not provided. Using default credentials.");
     }
 
     admin.initializeApp(options);
-    console.log(`✅ Firebase Admin initialized successfully for project: ${firebaseProjectId}`);
+    console.log(`Firebase Admin initialized successfully for project: ${firebaseProjectId}`);
   } else {
-    console.error("❌ FIREBASE_PROJECT_ID missing. Firestore operations will fail.");
+    console.warn("FIREBASE_PROJECT_ID missing. Firestore operations will fail.");
   }
 } catch (error: any) {
   if (error.code !== 'app/duplicate-app') {
-    console.error("❌ Firebase Admin initialization error:", error.message);
+    console.error("Firebase Admin initialization error:", error);
   }
 }
 
 // --- Firebase Admin Instance Proxy (Lazy Loaded to prevent module-load crashes on Vercel) ---
 const db = new Proxy({} as admin.firestore.Firestore, {
   get(target, prop) {
-    try {
-      const instance = (firebaseDatabaseId && firebaseDatabaseId !== "(default)") ? getFirestore(firebaseDatabaseId) : getFirestore();
-      const val = Reflect.get(instance, prop);
-      return typeof val === "function" ? val.bind(instance) : val;
-    } catch (e) {
-      console.error("Firestore proxy error:", e);
-      throw e;
-    }
+    const instance = (firebaseDatabaseId && firebaseDatabaseId !== "(default)") ? getFirestore(firebaseDatabaseId) : getFirestore();
+    const val = Reflect.get(instance, prop);
+    return typeof val === "function" ? val.bind(instance) : val;
   }
 });
-
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = 3000;
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
-
-// CORS Headers for Vercel
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type');
-  if (req.method === 'OPTIONS') {
-    res.sendStatus(200);
-  } else {
-    next();
-  }
-});
 
 // --- Google Client Helper ---
 const getGoogleAuth = () => {
@@ -158,63 +130,49 @@ const HEADERS = [
 
 // Helper to ensure a sheet exists and has headers
 const ensureSheetExists = async (sheets: any, spreadsheetId: string, title: string) => {
-  try {
-    const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
-    const sheet = spreadsheet.data.sheets?.find((s: any) => s.properties?.title === title);
+  const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
+  const sheet = spreadsheet.data.sheets?.find((s: any) => s.properties?.title === title);
 
-    if (!sheet) {
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId,
-        requestBody: {
-          requests: [{ addSheet: { properties: { title } } }]
-        }
-      });
-      // Add headers
-      await sheets.spreadsheets.values.update({
-        spreadsheetId,
-        range: `${title}!A1`,
-        valueInputOption: "USER_ENTERED",
-        requestBody: { values: [HEADERS] }
-      });
-    }
-    return title;
-  } catch (error) {
-    console.error("ensureSheetExists error:", error);
-    throw error;
+  if (!sheet) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [{ addSheet: { properties: { title } } }]
+      }
+    });
+    // Add headers
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `${title}!A1`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values: [HEADERS] }
+    });
   }
+  return title;
 };
 
 // Helper for private email storage
 const getEmailMapping = async (sheets: any, spreadsheetId: string) => {
-  try {
-    const title = "_Mails_";
-    await ensureSheetExists(sheets, spreadsheetId, title);
-    const response = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${title}!A:B` });
-    const rows = response.data.values || [];
-    const map: { [key: string]: string } = {};
-    rows.forEach((row: string[]) => {
-      if (row[0]) map[row[0]] = row[1];
-    });
-    return map;
-  } catch (error) {
-    console.error("getEmailMapping error:", error);
-    return {};
-  }
+  const title = "_Mails_";
+  await ensureSheetExists(sheets, spreadsheetId, title);
+  const response = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${title}!A:B` });
+  const rows = response.data.values || [];
+  const map: { [key: string]: string } = {};
+  rows.forEach((row: string[]) => {
+    if (row[0]) map[row[0]] = row[1];
+  });
+  return map;
 };
 
 const saveEmailMapping = async (sheets: any, spreadsheetId: string, submissionId: string, email: string) => {
-  try {
-    const title = "_Mails_";
-    await ensureSheetExists(sheets, spreadsheetId, title);
-    await sheets.spreadsheets.values.append({
-      spreadsheetId,
-      range: `${title}!A:B`,
-      valueInputOption: "USER_ENTERED",
-      requestBody: { values: [[submissionId, email]] }
-    });
-  } catch (error) {
-    console.error("saveEmailMapping error:", error);
-  }
+  const title = "_Mails_";
+  await ensureSheetExists(sheets, spreadsheetId, title);
+  await sheets.spreadsheets.values.append({
+    spreadsheetId,
+    range: `${title}!A:B`,
+    valueInputOption: "USER_ENTERED",
+    requestBody: { values: [[submissionId, email]] }
+  });
 };
 
 // Helper to get the correct range/sheet name
@@ -305,9 +263,9 @@ const sendMail = async (to: string, cc: string, subject: string, text: string, f
       subject,
       text,
     });
-    console.log(`✅ Email sent to ${to} (CC: ${cc})`);
+    console.log(`Email sent to ${to} (CC: ${cc})`);
   } catch (error) {
-    console.error("❌ Email error:", error);
+    console.error("Email error:", error);
   }
 };
 
@@ -395,9 +353,9 @@ app.post("/api/claim", async (req, res) => {
         });
       });
       await itemsBatch.commit();
-      console.log(`✅ Claim ${submissionId} synced to Firestore.`);
+      console.log(`Claim ${submissionId} synced to Firestore.`);
     } catch (fsError) {
-      console.error("❌ Firestore Save Error:", fsError);
+      console.error("Firestore Save Error:", fsError);
     }
     
     const appendResponse = await sheets.spreadsheets.values.append({
@@ -467,7 +425,7 @@ app.post("/api/claim", async (req, res) => {
 
     res.json({ success: true, submissionId });
   } catch (error: any) {
-    console.error("❌ Submit Error:", error);
+    console.error("Submit Error:", error);
     logErrorToFile("Submit Claim API", error, { body: req.body });
     res.status(500).json({ error: error.message });
   }
@@ -480,7 +438,6 @@ app.get("/api/diagnose", async (req, res) => {
     environment: {
       isVercel: !!process.env.VERCEL,
       nodeEnv: process.env.NODE_ENV || "not set",
-      port: PORT,
     },
     googleCredentials: {
       emailConfigured: !!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
@@ -502,7 +459,6 @@ app.get("/api/diagnose", async (req, res) => {
     },
     smtpConfig: {
       smtpHost: process.env.SMTP_HOST || "smtp.gmail.com",
-      smtpPort: process.env.SMTP_PORT || "465",
       smtpUserConfigured: !!process.env.SMTP_USER,
       smtpUser: process.env.SMTP_USER ? `${process.env.SMTP_USER.slice(0, 5)}...` : "missing",
       smtpPassConfigured: !!process.env.SMTP_PASS,
@@ -597,7 +553,7 @@ app.get("/api/claims", async (req, res) => {
 
     res.json(allClaims);
   } catch (error: any) {
-    console.error("❌ Admin Fetch Error:", error.message);
+    console.error("Admin Fetch Error:", error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -701,7 +657,7 @@ app.post("/api/admin/action", async (req, res) => {
         process.env.ACCOUNTS_EMAIL || "",
         `${data.employeeemail},${data.branchheademail || ""},${process.env.ADMIN_EMAILS}`,
         `PAYMENT PROCESSING REQUEST: ${data.salespersonname}`,
-        `Dear Accounts Department,\n\nPlease release the payment for the following approved claim:\n\nEmployee: ${data.salespersonname}\nBranch: ${data.branchname}\nAmount: ₹${data.grandtotal}\n\nSubmission ID: ${data.submissionid}`,
+        `Dear Accounts Department,\n\nPlease release the payment for the following approved claim:\n\nEmployee: ${data.salespersonname}\nBranch: ${data.branchname}\nAmount: ₹${data.grandtotal}\nSubmission ID: ${data.submissionid}\n\nApproved By: ${adminName}\nTimestamp: ${timestamp}`,
         adminName,
         adminEmail
       );
@@ -740,7 +696,6 @@ app.post("/api/admin/action", async (req, res) => {
 
     res.json({ success: true });
   } catch (error: any) {
-    console.error("❌ Admin Action Error:", error.message);
     res.status(500).json({ error: error.message });
   }
 });
@@ -761,7 +716,7 @@ async function startServer() {
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`🚀 Server running on http://localhost:${PORT}`);
+    console.log(`Server running on http://localhost:${PORT}`);
   });
 }
 
